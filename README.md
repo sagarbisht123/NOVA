@@ -142,13 +142,4 @@ OPENALEX_MAILTO=
 
 ---
 
-## Limitations
 
-- "Chat it out" requires a resolvable open-access PDF; papers without one show
-  a disabled button rather than failing silently.
-- The Intent graph's checkpointer (`MemorySaver`) is in-process, suitable for a
-  single researcher on a single dev server. A persistent checkpointer
-  (`SqliteSaver` / `PostgresSaver`) is required for multi-worker deployment.
-- Clustering excludes papers with no abstract, since title alone is an
-  insufficient signal for methodological grouping. These papers are still
-  surfaced to the user, not dropped.
