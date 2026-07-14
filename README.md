@@ -1,84 +1,200 @@
-# ✦ NOVA — Research, guided by SONIC
+# NOVA — Research, guided by SONIC
 
-NOVA is a single Streamlit app that unpacks and connects two existing projects,
-**with their logic unchanged**:
+NOVA is an agentic research assistant that takes a raw research idea through three
+connected stages: intent formalization with human review, multi-source literature
+search with semantic clustering, and per-paper conversational Q&A. SONIC is the
+assistant persona presented to the user throughout the workflow.
 
-- **`app/`** — the research pipeline (the former `structured_agent`'s `app/`
-  package): an **intent agent** that frames a raw idea into
-  Problem / Objective / Additional Context, and a **search agent** that fetches
-  papers (arXiv + Semantic Scholar + OpenAlex), reranks them with SPECTER, and
-  clusters them by approach.
-- **`chatbot_core/`** — the single-PDF Q&A chatbot (`Qa.py` + `vectorizeer.py`),
-  copied verbatim.
+---
 
-**NOVA** is the product. **SONIC** is the assistant persona that talks you
-through it.
+## Architecture
 
-## The flow
+```mermaid
+flowchart TD
+    U["User Input: raw research idea"] --> START1
 
+    subgraph INTENT["Stage 1 — Intent Agent (app/modules/intent/graph.py)"]
+        direction TB
+        START1((START)) --> P["Problem Framing"]
+        START1 --> O["Objective Framing"]
+        START1 --> C["Context Framing"]
+        P --> AGG["Aggregator<br/>merges the three sections into one document"]
+        O --> AGG
+        C --> AGG
+        AGG --> POL["Web Polish<br/>Tavily search grounds terminology and named entities"]
+        POL --> HR{{"Human Review<br/>graph interrupt"}}
+    end
+
+    HR <-->|"resume with edited text"| HUMAN["Human-in-the-loop<br/>reviews and edits the polished intent"]
+    HR --> END1((END)) --> RI["Output: Verified Research Intent"]
+
+    RI --> START2
+
+    subgraph SEARCH["Stage 2 — Search and Clustering Agent (app/modules/search/graph.py)"]
+        direction TB
+        START2((START)) --> ARX["arXiv Query Node"]
+        START2 --> SS["Semantic Scholar Query Node"]
+        START2 --> OA["OpenAlex Query Node"]
+        ARX --> AGN["Aggregation<br/>title normalization, deduplication, field merge"]
+        SS --> AGN
+        OA --> AGN
+        AGN --> RRK["Reranking<br/>SPECTER embeddings, cosine similarity, top 15"]
+        RRK --> CLU["Clustering<br/>structured LLM output, grouped by approach"]
+        CLU --> END2((END))
+    end
+
+    END2 --> RESULTS["Output: Clustered Papers<br/>title, authors, links"]
+    RESULTS -->|"Chat it out"| DL
+
+    subgraph CHATBOT["Stage 3 — Per-Paper Q&A (chatbot_core/)"]
+        direction TB
+        DL["PDF Download"] --> VEC["Vectorization<br/>section-aware chunking, table-block protection"]
+        VEC --> STORE[("Chroma Vector Store<br/>cached by PDF content hash")]
+        STORE --> RET["Retriever<br/>top-15 similarity search, cross-encoder rerank to top 5"]
+        RET --> LLM["LLM Answer Generation<br/>grounded, page-cited responses"]
+        LLM --> UOUT["User follow-up question"]
+        UOUT --> RET
+    end
 ```
-your raw research idea
-   → SONIC: "lemme juss refine it"      (INTENT agent frames it)
-   → you review / edit the framing
-   → SONIC: "on it…"                    (SEARCH agent fetches → rerank → cluster)
-   → SONIC: "these are the best matches" (clean paper thumbnails, grouped by approach)
-   → "💬 Chat it out" on any paper       (its PDF is downloaded, vectorized, and
-                                          you Q&A over it — powered by chatbot_core)
-```
 
-Each paper thumbnail shows **title, authors, and links only** (no abstract):
-a **📄 Paper** button (source page), a **⬇ PDF** button, and a **💬 Chat it out**
-button. Clicking *Chat it out* downloads that paper's PDF, runs it through
-`vectorizeer.build_vectorstore`, and opens a grounded Q&A chat over it using
-`Qa.py`'s retriever + LLM chain.
+---
 
-The chatbot's embedding + reranker models are **pre-loaded at startup** (behind
-the "Waking up SONIC…" splash) so the first *Chat it out* click is snappy.
+## Pipeline
 
-## Layout
+**Stage 1 — Intent Agent**
+The user's raw idea is processed by three independent LLM calls, each with a
+narrowly scoped task:
+- **Problem** — the gap, limitation, or open issue implied by the query.
+- **Objective** — the outcome the user wants, described independently of method.
+- **Context** — constraints, known approaches, and scope, if stated.
+
+These three outputs are merged into a single document by an aggregator node,
+then passed through a web-polish node that runs a live Tavily search to correct
+or sharpen terminology and named entities. Execution then pauses at an
+`interrupt()` in the LangGraph checkpointer, and the polished intent is returned
+to the user for review. Any edits are resumed into the same graph thread via
+`Command(resume=...)`, producing the final verified Research Intent.
+
+**Stage 2 — Search and Clustering Agent**
+The verified Research Intent is converted into three separate queries, one per
+academic API, each generated with that API's syntax in mind:
+- **arXiv** — lexical, field-prefixed boolean query.
+- **Semantic Scholar** — exact-match query with hedged synonym groups.
+- **OpenAlex** — boolean query with quoted phrase grouping.
+
+All three sources are queried in parallel. Results are deduplicated by
+normalized title and merged into a single record per paper, preserving
+per-source fields (citation counts, URLs) rather than overwriting them.
+The merged set is reranked against the Research Intent using SPECTER paper
+embeddings, and the top 15 results are passed to a clustering node, which
+groups them by methodological approach using structured LLM output.
+
+**Stage 3 — Chat It Out**
+Each clustered result is presented as a paper card with title, authors, and
+links. Selecting "Chat it out" on a paper triggers the following:
+1. The paper's PDF is downloaded.
+2. The PDF is parsed and split into section-aware chunks, with numeric/table
+   content protected from mid-row splitting.
+3. Chunks are embedded and stored in a Chroma vector store, cached by the
+   PDF's content hash so repeat runs skip re-processing.
+4. Questions are answered by retrieving the top 15 chunks by similarity,
+   reranking them to the top 5 with a cross-encoder, and generating a
+   grounded, page-cited response.
+
+---
+
+## Design Notes
+
+| Component | Significance |
+|---|---|
+| Fan-out / fan-in in the Intent graph | Problem, Objective, and Context are drafted by independent LLM calls with strictly scoped prompts, rather than one prompt handling all three, which reduces cross-section bleed (e.g. a method appearing in the Objective). |
+| Graph-level interrupt for human review | The graph suspends execution using LangGraph's checkpointer rather than simulating a pause in the UI layer. The edited text is resumed into the same execution thread, not re-run from scratch. |
+| Per-API query generation | arXiv, Semantic Scholar, and OpenAlex have different query grammars (lexical, exact-match AND, boolean). Each query is generated by a prompt written for that API's specific behavior, rather than a single generic query applied everywhere. |
+| SPECTER-based reranking | `allenai-specter` is trained on academic title/abstract pairs, making it better suited to judging paper-to-paper relevance than a general-purpose sentence embedding model. |
+| Cross-source merge | Titles are normalized (Unicode folding, punctuation stripping) to detect the same paper across sources, and per-source fields are preserved in a dict rather than overwritten during merge. |
+| Approach-based clustering | Papers are clustered by methodology rather than topic, since topical overlap is already guaranteed by retrieval. The clustering prompt uses the Objective to determine which methodological distinctions are relevant. |
+| Section-aware chunking | PDFs are split by detected section headers first, with number-dense lines (tables) isolated into their own chunks before the recursive text splitter runs on remaining prose. |
+| Retrieve-then-rerank for Q&A | Each query retrieves 15 candidates by embedding similarity, then reranks to the top 5 with a cross-encoder (`BAAI/bge-reranker-base`) before passing context to the LLM. |
+| Per-run structured logging | Each node logs to `logs/{run_id}.log`, making a single query's full execution path — prompts, API queries, rerank scores — traceable independently of other concurrent runs. |
+
+---
+
+## Project Layout
 
 ```
 NOVA/
-├── nova_app.py          # the whole Streamlit UI + wiring (this is the only new code)
-├── app/                 # the research agent — copied UNCHANGED from structured_agent/app
-│   ├── core/logging_config.py     # per-query logs -> NOVA/logs/{run_id}.log
-│   └── modules/{intent,search}/   # the two LangGraph agents + providers
-├── chatbot_core/        # the single-PDF Q&A chatbot — copied UNCHANGED
-│   ├── Qa.py
-│   └── vectorizeer.py
-├── .streamlit/config.toml         # dark NOVA theme
-├── .env                 # GROQ / TAVILY / SEMANTIC_SCHOLAR keys (merged from both projects)
+├── nova_app.py                       # Streamlit UI and orchestration
+├── app/                               # LangGraph agents
+│   ├── core/logging_config.py                # per-run logging
+│   └── modules/
+│       ├── intent/graph.py                   # Stage 1
+│       └── search/
+│           ├── graph.py                      # Stage 2
+│           ├── reranking.py                  # SPECTER reranker
+│           └── providers/                    # arXiv, Semantic Scholar, OpenAlex clients
+├── chatbot_core/
+│   ├── vectorizeer.py                        # PDF chunking and vector store
+│   └── Qa.py                                 # retrieval and answer generation
+├── logs/                              # per-run logs
+├── downloads/                         # PDFs fetched via "Chat it out"
+├── vectorstores/                      # per-PDF Chroma stores, cached by content hash
 ├── requirements.txt
-├── run.sh
-├── logs/                # one log file per research query
-├── downloads/           # PDFs pulled for "Chat it out"
-└── vectorstores/        # per-PDF Chroma stores (cached by content hash)
+└── run.sh
 ```
 
-`nova_app.py` is UI + orchestration only — it imports the agents' compiled
-graphs and the chatbot's functions and drives them. It changes no agent or
-chatbot logic.
+`nova_app.py` is UI and orchestration only. It imports the compiled graphs and
+chatbot functions and does not modify agent or chatbot logic.
 
-## Run
+---
+
+## Tech Stack
+
+| Layer | Technology |
+|---|---|
+| Orchestration | LangGraph (StateGraph, fan-out/fan-in edges, interrupt + checkpointer) |
+| LLM | Groq — `openai/gpt-oss-120b` (agents), `llama-3.3-70b-versatile` (Q&A) |
+| Web grounding | Tavily |
+| Academic search | arXiv API, Semantic Scholar API, OpenAlex API |
+| Reranking | `sentence-transformers/allenai-specter`, `BAAI/bge-reranker-base` |
+| Embeddings | `BAAI/bge-base-en-v1.5` |
+| Vector store | Chroma |
+| PDF parsing | PyMuPDF |
+| API layer | FastAPI |
+| UI | Streamlit |
+
+---
+
+## Setup
 
 ```bash
+pip install -r requirements.txt
 ./run.sh
-# or explicitly:
-/home/sagar/workspace/Langchain/Veritus_project/chatbot/QA/bin/python -m streamlit run nova_app.py
+# or directly:
+streamlit run nova_app.py
 ```
 
-Then open the URL Streamlit prints (default http://localhost:8501).
+Open the URL Streamlit prints (default `http://localhost:8501`).
 
-> The combined environment is the chatbot's `QA/` virtualenv, augmented with
-> `streamlit` + `langchain-tavily` (a purely additive install — the shared
-> langchain/langgraph/torch versions were already identical between the two
-> projects). To rebuild from scratch in a fresh venv: `pip install -r requirements.txt`.
+Required environment variables (`.env`):
 
-## Notes / limitations
+```
+GROQ_API_KEY=
+SECOND_GROQ_API_KEY=
+TAVILY_API_KEY=
+SEMANTIC_SCHOLAR_API_KEY=
+OPENALEX_API_KEY=
+OPENALEX_MAILTO=
+```
 
-- Only papers with a resolvable open-access PDF can be chatted with; the others
-  show a disabled *Chat it out* button.
-- The intent graph's checkpointer and everything else live in the single
-  Streamlit process's memory — fine for one researcher at a time.
-- First-ever startup downloads the two local models (BAAI/bge-base + bge-reranker)
-  if they aren't already in the HuggingFace cache; subsequent starts are fast.
+---
+
+## Limitations
+
+- "Chat it out" requires a resolvable open-access PDF; papers without one show
+  a disabled button rather than failing silently.
+- The Intent graph's checkpointer (`MemorySaver`) is in-process, suitable for a
+  single researcher on a single dev server. A persistent checkpointer
+  (`SqliteSaver` / `PostgresSaver`) is required for multi-worker deployment.
+- Clustering excludes papers with no abstract, since title alone is an
+  insufficient signal for methodological grouping. These papers are still
+  surfaced to the user, not dropped.
