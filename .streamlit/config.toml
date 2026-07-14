@@ -1,0 +1,20 @@
+[theme]
+base = "dark"
+primaryColor = "#7c5cff"
+backgroundColor = "#080b16"
+secondaryBackgroundColor = "#111828"
+textColor = "#e6e9f2"
+font = "sans serif"
+
+[server]
+maxUploadSize = 50
+runOnSave = false
+# Disable the hot-reload file watcher. It walks every imported module and pokes
+# `transformers`' lazy loader, which eagerly tries to import an optional vision
+# model (zoedepth) that needs `torchvision` — crashing with a spurious
+# "No module named 'torchvision'". NOVA is a run-and-use app, not something you
+# edit live, so the watcher isn't needed.
+fileWatcherType = "none"
+
+[browser]
+gatherUsageStats = false

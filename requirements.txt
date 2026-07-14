@@ -1,0 +1,26 @@
+# NOVA = research pipeline (agent) + single-PDF Q&A (chatbot) + Streamlit UI.
+# One environment runs all three. Versions below match what both sub-projects
+# were already pinned to, so nothing gets upgraded out from under them.
+
+# --- UI ---
+streamlit
+
+# --- research agent (intent + search/cluster graphs) ---
+langgraph
+langchain-core
+langchain-groq
+langchain-tavily
+sentence-transformers          # SPECTER reranker in the search graph
+python-dotenv
+pydantic
+requests
+numpy
+
+# --- chatbot (single-PDF Q&A) ---
+langchain
+langchain-community            # HuggingFaceCrossEncoder, HuggingFaceBgeEmbeddings
+langchain-classic              # CrossEncoderReranker + ContextualCompressionRetriever
+langchain-text-splitters
+langchain-chroma
+chromadb
+pymupdf                        # `import fitz`

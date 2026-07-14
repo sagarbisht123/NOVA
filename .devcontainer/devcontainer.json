@@ -1,0 +1,17 @@
+{
+  "name": "NOVA (Streamlit)",
+  "image": "mcr.microsoft.com/devcontainers/python:3.11",
+  "forwardPorts": [8501],
+  "portsAttributes": {
+    "8501": {
+      "label": "NOVA (Streamlit)",
+      "onAutoForward": "notify"
+    }
+  },
+  "postCreateCommand": "pip install --no-cache-dir -r requirements.txt",
+  "customizations": {
+    "vscode": {
+      "extensions": ["ms-python.python"]
+    }
+  }
+}

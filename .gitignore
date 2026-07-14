@@ -1,0 +1,28 @@
+# --- secrets (NEVER commit) ---
+.env
+.env.*
+
+# --- virtualenvs ---
+NOVA_venv/
+QA/
+venv/
+.venv/
+
+# --- runtime caches (ephemeral, regenerated at runtime) ---
+vectorstores/
+downloads/
+logs/
+
+# --- python cruft ---
+__pycache__/
+*.pyc
+*.pyo
+
+# --- local-only helper (points at a local venv path) ---
+run.sh
+
+# --- reference image, not needed at runtime ---
+assets/*.png
+
+# --- misc ---
+.DS_Store
