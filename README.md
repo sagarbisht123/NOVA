@@ -8,54 +8,8 @@ assistant persona presented to the user throughout the workflow.
 ---
 
 ## Architecture
+![NOVA Architecture](assets/diagram.png)
 
-```mermaid
-flowchart TD
-    U["User Input: raw research idea"] --> START1
-
-    subgraph INTENT["Stage 1 — Intent Agent (app/modules/intent/graph.py)"]
-        direction TB
-        START1((START)) --> P["Problem Framing"]
-        START1 --> O["Objective Framing"]
-        START1 --> C["Context Framing"]
-        P --> AGG["Aggregator<br/>merges the three sections into one document"]
-        O --> AGG
-        C --> AGG
-        AGG --> POL["Web Polish<br/>Tavily search grounds terminology and named entities"]
-        POL --> HR{{"Human Review<br/>graph interrupt"}}
-    end
-
-    HR <-->|"resume with edited text"| HUMAN["Human-in-the-loop<br/>reviews and edits the polished intent"]
-    HR --> END1((END)) --> RI["Output: Verified Research Intent"]
-
-    RI --> START2
-
-    subgraph SEARCH["Stage 2 — Search and Clustering Agent (app/modules/search/graph.py)"]
-        direction TB
-        START2((START)) --> ARX["arXiv Query Node"]
-        START2 --> SS["Semantic Scholar Query Node"]
-        START2 --> OA["OpenAlex Query Node"]
-        ARX --> AGN["Aggregation<br/>title normalization, deduplication, field merge"]
-        SS --> AGN
-        OA --> AGN
-        AGN --> RRK["Reranking<br/>SPECTER embeddings, cosine similarity, top 15"]
-        RRK --> CLU["Clustering<br/>structured LLM output, grouped by approach"]
-        CLU --> END2((END))
-    end
-
-    END2 --> RESULTS["Output: Clustered Papers<br/>title, authors, links"]
-    RESULTS -->|"Chat it out"| DL
-
-    subgraph CHATBOT["Stage 3 — Per-Paper Q&A (chatbot_core/)"]
-        direction TB
-        DL["PDF Download"] --> VEC["Vectorization<br/>section-aware chunking, table-block protection"]
-        VEC --> STORE[("Chroma Vector Store<br/>cached by PDF content hash")]
-        STORE --> RET["Retriever<br/>top-15 similarity search, cross-encoder rerank to top 5"]
-        RET --> LLM["LLM Answer Generation<br/>grounded, page-cited responses"]
-        LLM --> UOUT["User follow-up question"]
-        UOUT --> RET
-    end
-```
 
 ---
 
